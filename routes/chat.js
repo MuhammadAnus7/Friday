@@ -32,6 +32,7 @@ router.post('/', async (req, res) => {
 
     if (
       error.message.includes('OPENAI_API_KEY') ||
+      error.message.includes('GROQ_API_KEY') ||
       error.message.includes('WEATHER_API_KEY') ||
       error.message.includes('NEWS_API_KEY') ||
       error.message.includes('SMTP_')
