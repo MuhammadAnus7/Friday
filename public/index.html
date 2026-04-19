@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Personal Assistant</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        max-width: 760px;
+        margin: 40px auto;
+        padding: 0 16px;
+      }
+
+      h1 {
+        margin-bottom: 12px;
+      }
+
+      .chat-box {
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 12px;
+        min-height: 240px;
+        margin-bottom: 12px;
+        background: #fafafa;
+      }
+
+      .message {
+        margin: 8px 0;
+        padding: 8px;
+        border-radius: 6px;
+      }
+
+      .user {
+        background: #e6f0ff;
+      }
+
+      .assistant {
+        background: #e9f7ef;
+      }
+
+      .controls {
+        display: grid;
+        gap: 8px;
+      }
+
+      .input-row {
+        display: flex;
+        gap: 8px;
+      }
+
+      input {
+        flex: 1;
+        padding: 10px;
+        font-size: 16px;
+      }
+
+      button {
+        padding: 10px 16px;
+        font-size: 16px;
+        cursor: pointer;
+      }
+
+      .listening {
+        min-height: 20px;
+        font-weight: 600;
+        color: #b45309;
+      }
+
+      .transcript {
+        min-height: 24px;
+        color: #374151;
+        font-style: italic;
+      }
+
+      .muted {
+        color: #6b7280;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>AI Personal Assistant</h1>
+
+    <div id="chatBox" class="chat-box" aria-live="polite"></div>
+
+    <div class="controls">
+      <div class="input-row">
+        <input id="messageInput" type="text" placeholder="Type or speak your message..." />
+        <button id="sendBtn">Send</button>
+        <button id="micBtn" type="button">🎤 Mic</button>
+      </div>
+      <div id="listeningIndicator" class="listening" aria-live="polite"></div>
+      <div id="transcript" class="transcript muted">Transcript will appear here...</div>
+    </div>
+
+    <script>
+      const chatBox = document.getElementById('chatBox');
+      const messageInput = document.getElementById('messageInput');
+      const sendBtn = document.getElementById('sendBtn');
+      const micBtn = document.getElementById('micBtn');
+      const listeningIndicator = document.getElementById('listeningIndicator');
+      const transcriptEl = document.getElementById('transcript');
+
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const speechSynthesisSupported = 'speechSynthesis' in window;
+      let recognition = null;
+      let isListening = false;
+
+      function getOrCreateUserId() {
+        const storageKey = 'assistant_user_id';
+        let userId = localStorage.getItem(storageKey);
+
+        if (!userId) {
+          userId = `user_${crypto.randomUUID()}`;
+          localStorage.setItem(storageKey, userId);
+        }
+
+        return userId;
+      }
+
+      const userId = getOrCreateUserId();
+
+      function appendMessage(role, text) {
+        const div = document.createElement('div');
+        div.className = `message ${role}`;
+        div.textContent = `${role === 'user' ? 'You' : 'Assistant'}: ${text}`;
+        chatBox.appendChild(div);
+        chatBox.scrollTop = chatBox.scrollHeight;
+      }
+
+      function updateListeningUI(listening) {
+        isListening = listening;
+        listeningIndicator.textContent = listening ? 'Listening...' : '';
+        micBtn.textContent = listening ? '⏹ Stop' : '🎤 Mic';
+      }
+
+      function setTranscript(text, isMuted = false) {
+        transcriptEl.textContent = text || 'Transcript will appear here...';
+        transcriptEl.classList.toggle('muted', isMuted);
+      }
+
+      function speakText(text) {
+        if (!speechSynthesisSupported || !text) return;
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.rate = 1;
+        utterance.pitch = 1;
+        window.speechSynthesis.speak(utterance);
+      }
+
+      async function sendMessage(overrideMessage = '') {
+        const message = (overrideMessage || messageInput.value).trim();
+        if (!message) return;
+
+        appendMessage('user', message);
+        messageInput.value = '';
+        sendBtn.disabled = true;
+        micBtn.disabled = true;
+
+        try {
+          const res = await fetch('/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId, message })
+          });
+
+          const data = await res.json();
+
+          if (!res.ok) {
+            throw new Error(data.error || 'Request failed.');
+          }
+
+          appendMessage('assistant', data.reply);
+          speakText(data.reply);
+
+          if (data.action?.type === 'open_url' && data.action.url) {
+            window.open(data.action.url, '_blank', 'noopener,noreferrer');
+          }
+          if (data.type === 'weather' && data.data) {
+            appendMessage(
+              'assistant',
+              `Weather details → Temp: ${data.data.temperatureC}°C, Feels like: ${data.data.feelsLikeC}°C, Humidity: ${data.data.humidity}%`
+            );
+          }
+
+          if (data.type === 'news' && data.data?.headlines?.length) {
+            const links = data.data.headlines.map((item) => `${item.title} (${item.url})`).join(' | ');
+            appendMessage('assistant', `News links: ${links}`);
+          }
+
+          if (data.type === 'email' && data.data?.messageId) {
+            appendMessage('assistant', `Email delivery id: ${data.data.messageId}`);
+          }
+
+        } catch (error) {
+          appendMessage('assistant', `Error: ${error.message}`);
+        } finally {
+          sendBtn.disabled = false;
+          micBtn.disabled = false;
+          messageInput.focus();
+        }
+      }
+
+      function initializeSpeechRecognition() {
+        if (!SpeechRecognition) {
+          micBtn.disabled = true;
+          listeningIndicator.textContent = 'Speech recognition is not supported in this browser.';
+          return;
+        }
+
+        recognition = new SpeechRecognition();
+        recognition.lang = 'en-US';
+        recognition.interimResults = true;
+        recognition.continuous = false;
+
+        let finalTranscript = '';
+
+        recognition.onstart = () => {
+          finalTranscript = '';
+          setTranscript('', true);
+          updateListeningUI(true);
+        };
+
+        recognition.onresult = (event) => {
+          let interimTranscript = '';
+
+          for (let i = event.resultIndex; i < event.results.length; i += 1) {
+            const transcript = event.results[i][0].transcript;
+            if (event.results[i].isFinal) {
+              finalTranscript += `${transcript} `;
+            } else {
+              interimTranscript += transcript;
+            }
+          }
+
+          const combined = `${finalTranscript}${interimTranscript}`.trim();
+          messageInput.value = combined;
+          setTranscript(combined, !combined);
+        };
+
+        recognition.onerror = (event) => {
+          updateListeningUI(false);
+          setTranscript(`Speech recognition error: ${event.error}`, false);
+        };
+
+        recognition.onend = () => {
+          updateListeningUI(false);
+          const finalMessage = messageInput.value.trim();
+
+          if (finalMessage) {
+            sendMessage(finalMessage);
+          } else {
+            setTranscript('No speech detected. Try again.', false);
+          }
+        };
+      }
+
+      function toggleListening() {
+        if (!recognition) return;
+
+        if (isListening) {
+          recognition.stop();
+          return;
+        }
+
+        setTranscript('', true);
+        recognition.start();
+      }
+
+      sendBtn.addEventListener('click', () => sendMessage());
+      micBtn.addEventListener('click', toggleListening);
+
+      messageInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          sendMessage();
+        }
+      });
+
+      initializeSpeechRecognition();
+    </script>
+  </body>
+</html>
